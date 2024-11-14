@@ -1,5 +1,5 @@
-./Lib
-./Scripts
-./include
+/Lib
+/Scripts
+/include
 
-.pyenv.cfg
+pyvenv.cfg
