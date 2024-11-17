@@ -5,5 +5,4 @@
 /share
 
 pyvenv.cfg
-.env2
 .env
