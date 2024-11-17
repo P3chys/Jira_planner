@@ -13,26 +13,35 @@ class Jira():
 
     def __init__(self):
         self.connection = JIRA(
-            server=os.getenv('JIRA_URL'),
-            token_auth=os.getenv('JIRA_TOKEN')
+            server="http://localhost",
+            token_auth="NTQxOTI5Mjk5NjcyOpGKt+jAn02ULuL51rqciFB6fSAi"
             )
     
     def create_board(self, name:str, filter_id=10000):
             return self.connection.create_board(name=name, filter_id=filter_id)
 
     def create_sprint(self, name:str, board:int):
-        self.connection.create_sprint(
+        return self.connection.create_sprint(
         name=name,
         board_id=board
         )
 
-    def create_issue(self, project, summary='default issue', description='default description', issuetype={'name': 'Bug'}):
-        return self.connection.create_issue(
-            project=project, 
-            summary=summary,
-            description=description, 
-            issuetype=issuetype,
-        )
+    def create_issue(self, project, summary='default issue', description='default description',
+                        issuetype={'name': 'Task'}, original_estimate=None, remaining_estimate=None):
+            issue_data = {
+                'project': project,
+                'summary': summary,
+                'description': description,
+                'issuetype': issuetype,
+            }
+            if original_estimate or remaining_estimate:
+                issue_data['timetracking'] = {}
+                if original_estimate:
+                    issue_data['timetracking']['originalEstimate'] = original_estimate
+                if remaining_estimate:
+                    issue_data['timetracking']['remainingEstimate'] = remaining_estimate
+
+            return self.connection.create_issue(fields=issue_data)
 
     def get_sprint_tasks(self, project, sprint):
         jql = f'project  = {project} AND Sprint = "{sprint}"'
@@ -44,6 +53,18 @@ class Jira():
     def get_boards(self):
         return self.connection.boards()
     
+    def add_worklog(self, issue, timeSpentSeconds, user:str = None):
+        return self.connection.add_worklog(
+            issue = issue,
+            timeSpentSeconds = timeSpentSeconds,
+            user = user
+        )
+
+    def asign_issue_to_sprint(self,sprint:int,issue:str | list[str]):
+        if isinstance(issue, str):  # Ensure issue is always a list
+            issue = [issue]
+        return self.connection.add_issues_to_sprint(sprint,issue)
+
     @DeprecationWarning
     def create_user(self, username, email, password, fullname):
         return self.connection.add_user(
@@ -52,3 +73,4 @@ class Jira():
             password=password,
             fullname=fullname
         )
+
