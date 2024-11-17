@@ -45,8 +45,8 @@ class Jira():
         return self.connection.boards()
     
     @DeprecationWarning
-    def create_user(username, email, password, fullname):
-        return get_jira_connection().add_user(
+    def create_user(self, username, email, password, fullname):
+        return self.connection.add_user(
             username=username,
             email=email,
             password=password,
