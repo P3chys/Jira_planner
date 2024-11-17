@@ -122,7 +122,3 @@ env.process(setup_simulation())
 
 # Run the simulation
 simulation.run()
-<<<<<<< HEAD
-=======
-
->>>>>>> 2e799ede3e63e1bf375f6dd32c9080c63959b206
