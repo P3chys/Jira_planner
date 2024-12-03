@@ -1,15 +1,16 @@
 import simpy
-from jira_tooling import Jira  
-import sys
-
+import random
+from jira_tooling import Jira
 
 class JiraSimulation:
-    def __init__(self, env):
+    def __init__(self, env, random_seed=42):
         self.env = env
         self.jira = Jira()
         self.board_id = None
         self.sprints = {}
         self.issues = {}
+        self.random = random.Random(random_seed)
+        self.current_sprint_id = None
 
     def create_board(self, name):
         board = self.jira.create_board(name=name)
@@ -17,39 +18,61 @@ class JiraSimulation:
         print(f"[{self.env.now}] Board '{name}' created with ID {self.board_id}.")
         return self.board_id
 
-    def create_sprint(self, sprint_name, duration):
-        """Creates a sprint and schedules its completion."""
+    def create_sprint(self, sprint_name, duration=14):
+        """Creates a sprint with a fixed duration."""
         if not self.board_id:
             raise ValueError("Board must be created before adding sprints.")
 
         sprint = self.jira.create_sprint(name=sprint_name, board=self.board_id)
         sprint_id = sprint.id
-        self.sprints[sprint_id] = {"name": sprint_name, "tasks": []}
-        print(f"[{self.env.now}] Sprint '{sprint_name}' created with ID {sprint_id}.")
+        self.current_sprint_id = sprint_id
+        
+        self.sprints[sprint_id] = {
+            "name": sprint_name, 
+            "tasks": [], 
+            "duration": duration,
+            "start_time": self.env.now
+        }
+        
+        print(f"[{self.env.now}] Sprint '{sprint_name}' created with ID {sprint_id}. Duration: {duration} days")
 
-        # Schedule sprint completion
-        self.env.process(self.complete_sprint(sprint_id, duration))
         return sprint_id
 
-    def complete_sprint(self, sprint_id, duration):
-        yield self.env.timeout(duration)
-        print(f"[{self.env.now}] Sprint '{self.sprints[sprint_id]['name']}' completed.")
-
-    def create_issue(self, project, summary, description, estimate, sprint_id=None):
-        """Creates an issue and optionally assigns it to a sprint."""
+    def create_issue(self, project, summary, description, estimate, sprint_id=None, complexity=1.0):
+        """
+        Create an issue with variable complexity and estimation.
+        """
+        # Convert estimate to hours if it's a string
+        if isinstance(estimate, str):
+            estimate = int(estimate.rstrip('h'))
+        
+        # Adjust estimate based on complexity and introduce randomness
+        actual_estimate = estimate * complexity * self.random.uniform(0.8, 1.2)
+        
         issue = self.jira.create_issue(
             project=project,
             summary=summary,
             description=description,
             issuetype={"name": "Task"},
-            original_estimate=estimate,
-            remaining_estimate=estimate,
+            original_estimate=f"{actual_estimate:.0f}h",
+            remaining_estimate=f"{actual_estimate:.0f}h",
         )
-        self.issues[issue.key] = {"summary": summary, "status": "TODO"}
+        
+        self.issues[issue.key] = {
+            "summary": summary, 
+            "status": "TODO", 
+            "original_estimate": estimate,
+            "actual_estimate": actual_estimate,
+            "work_logged": 0,
+            "sprint_history": [sprint_id] if sprint_id else []
+        }
 
-        print(f"[{self.env.now}] Issue '{summary}' created with ID {issue.key}.")
+        print(f"[{self.env.now}] Issue '{summary}' created with ID {issue.key}. Estimated: {actual_estimate:.2f}h")
+        
         if sprint_id:
             self.assign_to_sprint(sprint_id, issue.key)
+        
+        return issue.key
 
     def assign_to_sprint(self, sprint_id, issue_key):
         """Assigns an issue to a sprint."""
@@ -57,10 +80,23 @@ class JiraSimulation:
         self.sprints[sprint_id]["tasks"].append(issue_key)
         print(f"[{self.env.now}] Issue '{issue_key}' assigned to Sprint '{sprint_id}'.")
 
-    def log_work(self, issue_key, time_spent):
-        """Logs work on an issue."""
-        self.jira.add_worklog(issue=issue_key, timeSpentSeconds=time_spent * 3600)
-        print(f"[{self.env.now}] Logged {time_spent} hours of work for issue '{issue_key}'.")
+    def log_work(self, issue_key, work_hours):
+        """
+        Log work on an issue with productivity variations.
+        """
+        # Simulate productivity variations
+        productivity_factor = self.random.uniform(0.7, 1.3)
+        effective_time = work_hours * productivity_factor
+        
+        self.jira.add_worklog(issue=issue_key, timeSpentSeconds=effective_time * 3600)
+        
+        # Update issue's logged work
+        issue = self.issues[issue_key]
+        issue['work_logged'] += effective_time
+        
+        print(f"[{self.env.now}] Logged {effective_time:.2f} hours for issue '{issue_key}'. Productivity factor: {productivity_factor:.2f}")
+        
+        return effective_time
 
     def set_task_status(self, issue_key, status):
         """Updates the status of a task."""
@@ -68,57 +104,111 @@ class JiraSimulation:
         self.issues[issue_key]["status"] = status.name
         print(f"[{self.env.now}] Issue '{issue_key}' status updated to {status.name}.")
 
-    def run(self):
-        """Start the simulation."""
-        self.env.run()
+    def move_incomplete_tasks_to_next_sprint(self, current_sprint_id, next_sprint_id):
+        """
+        Move incomplete tasks to the next sprint.
+        """
+        incomplete_tasks = [
+            task for task in self.sprints[current_sprint_id]['tasks'] 
+            if self.issues[task]['status'] != 'DONE'
+        ]
+        
+        for task in incomplete_tasks:
+            # Assign to new sprint
+            self.assign_to_sprint(next_sprint_id, task)
+            
+            # Update task's sprint history
+            self.issues[task]['sprint_history'].append(next_sprint_id)
+            
+            print(f"[{self.env.now}] Moved incomplete task '{task}' to next sprint")
 
+    def work_logging_process(self, issue_key):
+        """
+        Process to log work for a specific issue every 2 days.
+        """
+        issue = self.issues[issue_key]
+        
+        while issue['work_logged'] < issue['actual_estimate'] and issue['status'] != 'DONE':
+            # Yield for 2 days
+            yield self.env.timeout(2)
+            #ADD STEPPING
+            input()
 
-# Define the simulation environment
-env = simpy.Environment()
+            
+            # Log work
+            work_hours = min(
+                4,  # Log max 4 hours per 2-day period
+                issue['actual_estimate'] - issue['work_logged']
+            )
+            
+            # Log work
+            self.log_work(issue_key, work_hours)
+            
+            # Update status if work is complete
+            if issue['work_logged'] >= issue['actual_estimate']:
+                self.set_task_status(issue_key, self.jira.JiraStatus.DONE)
+                break
 
-# Initialize the Jira simulation
-simulation = JiraSimulation(env)
-
-# Define tasks for the simulation
-def setup_simulation():
+def setup_simulation(env, simulation):
     # Create a board
     simulation.create_board("Development Board")
 
-    # Create a sprint and schedule tasks
-    sprint_id = simulation.create_sprint("Sprint 1", duration=10)
+    # Simulate three sprints
+    for sprint_num in range(1, 4):
+        # Create a sprint
+        sprint_id = simulation.create_sprint(f"Sprint {sprint_num}")
 
-    # Create and assign issues
-    simulation.create_issue(
-        project="MS",
-        summary="Task 24: Setup environment",
-        description="Install dependencies and set ment.",
-        estimate="4h",
-        sprint_id=sprint_id,
-    )
-    simulation.create_issue(
-        project="MS",
-        summary="Task 25: Impleme",
-        description="Develop the login ",
-        estimate="20h",
-        sprint_id=sprint_id,
-    )
-    # Log work and transition task statuses
-    env.process(task_progression("MS-24", 2, simulation.jira.JiraStatus.PROGRESS))
-    env.process(task_progression("MS-25", 3, simulation.jira.JiraStatus.TESTING))
+        # If it's not the first sprint, move incomplete tasks from previous sprint
+        #if sprint_num > 1:
+        #    previous_sprint_id = simulation.sprints[list(simulation.sprints.keys())[sprint_num-2]]['id']
+        #    simulation.move_incomplete_tasks_to_next_sprint(previous_sprint_id, sprint_id)
 
+        # Create a mix of tasks for the sprint
+        tasks = [
+            {
+                "summary": f"Task {30 + i}: Complex Development Task",
+                "description": f"Detailed work for task {30 + i}",
+                "estimate": f"{simulation.random.uniform(8, 20):.0f}h",
+                "complexity": simulation.random.uniform(0.8, 1.5)
+            } for i in range(3)  # 3 tasks per sprint
+        ]
 
+        # Create and start work logging for each task
+        for task in tasks:
+            issue_key = simulation.create_issue(
+                project="MS",
+                summary=task['summary'],
+                description=task['description'],
+                estimate=task['estimate'],
+                sprint_id=sprint_id,
+                complexity=task['complexity']
+            )
+            
+            # Start work logging process for the task
+            env.process(simulation.work_logging_process(issue_key))
+
+        # Wait for the sprint duration
+        yield env.timeout(14)
+
+    # Final timeout
     yield env.timeout(0)
 
-
-def task_progression(issue_key, work_hours, next_status):
-    """Simulate task work and status transition."""
-    yield env.timeout(2)  # Wait for 2 simulation time units
-    simulation.log_work(issue_key, work_hours)
-    simulation.set_task_status(issue_key, next_status)
-
-
-# Schedule the setup
-env.process(setup_simulation())
+def run_simulation():
+    # Set a fixed random seed for reproducibility
+    random.seed(42)
+    
+    # Create simulation environment
+    env = simpy.Environment()
+    
+    # Initialize the Jira simulation
+    simulation = JiraSimulation(env)
+    
+    # Schedule the setup
+    env.process(setup_simulation(env, simulation))
+    
+    # Run the simulation
+    env.run()
 
 # Run the simulation
-simulation.run()
+if __name__ == "__main__":
+    run_simulation()

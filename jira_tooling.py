@@ -73,4 +73,4 @@ class Jira():
             password=password,
             fullname=fullname
         )
-
+    
